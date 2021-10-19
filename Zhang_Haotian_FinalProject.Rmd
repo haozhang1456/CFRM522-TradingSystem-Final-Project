@@ -1,0 +1,708 @@
+---
+title: "Zhang_Haotian_FinalProject"
+author: "Haotian Zhang"
+date: "5/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## CFRM522 Final Project: Haotian Zhang
+
+# Strategy Explain
+
+This project will modify the simple fast/slow moving average strategy by considering another financial indicator: Rate of Change. Rate of change is an unbounded financial indicator that can take on both positive and negative values. A positive rate of change indicates an upward trend of the financial instrument, whereas a negative rate of change signifies a downward one. So the idea is that, when we are in long positions only, we want to stay out of the market when there is a downward trend, which is conveniently reflected by Rate of Change.
+
+# Strategy Rules
+
+There are three indicators needed for this strategy, fast moving average, slow moving average, and rate of change. For simplicity's sake, we are in long positions only. The initial equity is set to be 1 million, and we do fixed 2000 shares for each trade. The rate of change period is set to 60 days. The buy/sell rules are listed below:
+
+1. when the fast moving average is greater than the slow moving average, we go long.
+
+2. when the slow moving average is greater than the fast moving average, we exit the market completely.
+
+3. If there is a case where the rate of change indicator is less than -0.1 and we are still in the market because slow moving average has not yet crossed fast moving average, we override the exit rule and exit the market immediately.
+
+# Backtesting
+
+```{r , echo=FALSE, results='hide',warning=FALSE}
+library(quantstrat)
+library(parallel)
+library(doMC)
+registerDoMC(cores=detectCores())
+library(rgl)
+library(reshape2)
+```
+
+Let's setup the environment. We will be using VOO as our evaluation stock.
+
+```{r, results='hide',warning=FALSE}
+symbol = c("VOO")
+currency("USD")
+stock(symbol, currency="USD",multiplier=1)
+Sys.setenv(TZ="UTC") 
+initDate = '2010-12-31'
+startDate = '2011-01-01'
+endDate = '2020-12-31'
+getSymbols(symbol,from=startDate,to=endDate,index.class="POSIXct",adjust=T)
+```
+
+Let's setup the initial parameters.
+
+```{r, results='hide'}
+initEq <- 1e6
+fast <- 10
+slow <- 100
+roc <- 60
+```
+
+Let's setup portfolio and strategy to backtest.
+
+```{r, results='hide'}
+qs.strategy <- "RateOfChange"
+rm.strat(qs.strategy) #for rerun
+
+initPortf(qs.strategy,symbol, initDate=initDate)
+initAcct(qs.strategy,portfolios=qs.strategy, initDate=initDate, initEq=initEq)
+initOrders(portfolio=qs.strategy,initDate=startDate)
+strategy(qs.strategy,store=TRUE)
+
+#indicators
+add.indicator(strategy = qs.strategy, name = "SMA",arguments
+              =list(x=quote(Cl(mktdata)), n=fast), label="fast")
+add.indicator(strategy = qs.strategy, name = "SMA",arguments 
+              =list(x=quote(Cl(mktdata)), n=slow), label="slow")
+add.indicator(strategy = qs.strategy, name = "ROC", arguments 
+              =list(x=quote(Cl(mktdata)), n=roc), label = "roc")
+
+#signals
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="gt"),label="fast.gt.slow")
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="lt"),label="fast.lt.slow")
+add.signal(qs.strategy,name = "sigThreshold",arguments =
+             list(column="VOO.Close.roc",relationship="lt",
+                  threshold=-0.1,cross=TRUE),
+           label="signal.out")
+
+#rules
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.gt.slow",sigval=TRUE,
+                         replace = TRUE,orderqty = 2000,
+                         ordertype='market', orderside='long',
+                         orderset='ocolong'),
+         type='enter',
+         label = 'buy')
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.lt.slow", sigval=TRUE,
+                         replace = TRUE,orderqty='all',
+                         ordertype='market',orderside='long',
+                         orderset='ocolong'),
+         type='exit',
+         label = 'sell')
+add.rule(qs.strategy, name='ruleSignal',
+         arguments = list(sigcol="signal.out", sigval=TRUE, 
+                          replace = FALSE,
+                          orderside='long', 
+                          ordertype='market',
+                          orderqty='all',
+                          orderset='ocolong'),
+         type='chain', parent ='buy', 
+         label = 'override', enabled = FALSE)
+```
+
+Run backtest without roc 
+
+```{r,results='hide'}
+applyStrategy(strategy=qs.strategy , portfolios=qs.strategy)
+updatePortf(qs.strategy)
+updateAcct(qs.strategy)
+updateEndEq(qs.strategy)
+```
+
+```{r,echo=FALSE}
+t(tradeStats(qs.strategy)["Net.Trading.PL"])
+t(tradeStats(qs.strategy)["Avg.Trade.PL"])
+t(tradeStats(qs.strategy)["Profit.To.Max.Draw"])
+t(tradeStats(qs.strategy)["Max.Drawdown"])
+t(tradeStats(qs.strategy)["Ann.Sharpe"])
+```
+
+Run backtest with roc
+
+```{r, results='hide',echo=FALSE}
+qs.strategy <- "RateOfChange"
+rm.strat(qs.strategy) #for rerun
+
+initPortf(qs.strategy,symbol, initDate=initDate)
+initAcct(qs.strategy,portfolios=qs.strategy, initDate=initDate, initEq=initEq)
+initOrders(portfolio=qs.strategy,initDate=startDate)
+strategy(qs.strategy,store=TRUE)
+
+#indicators
+add.indicator(strategy = qs.strategy, name = "SMA",arguments
+              =list(x=quote(Cl(mktdata)), n=fast), label="fast")
+add.indicator(strategy = qs.strategy, name = "SMA",arguments 
+              =list(x=quote(Cl(mktdata)), n=slow), label="slow")
+add.indicator(strategy = qs.strategy, name = "ROC", arguments 
+              =list(x=quote(Cl(mktdata)), n=roc), label = "roc")
+
+#signals
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="gt"),label="fast.gt.slow")
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="lt"),label="fast.lt.slow")
+add.signal(qs.strategy,name = "sigThreshold",arguments =
+             list(column="VOO.Close.roc",relationship="lt",
+                  threshold=-0.1,cross=TRUE),
+           label="signal.out")
+
+#rules
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.gt.slow",sigval=TRUE,
+                         replace = TRUE,orderqty = 2000,
+                         ordertype='market', orderside='long',
+                         orderset='ocolong'),
+         type='enter',
+         label = 'buy')
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.lt.slow", sigval=TRUE,
+                         replace = TRUE,orderqty='all',
+                         ordertype='market',orderside='long',
+                         orderset='ocolong'),
+         type='exit',
+         label = 'sell')
+add.rule(qs.strategy, name='ruleSignal',
+         arguments = list(sigcol="signal.out", sigval=TRUE, 
+                          replace = FALSE,
+                          orderside='long', 
+                          ordertype='market',
+                          orderqty='all',
+                          orderset='ocolong'),
+         type='chain', parent ='buy', 
+         label = 'override', enabled = FALSE)
+```
+
+```{r,results='hide',echo=FALSE}
+enable.rule(qs.strategy, type = "chain",
+            label = 'override')
+applyStrategy(strategy=qs.strategy , portfolios=qs.strategy)
+updatePortf(qs.strategy)
+updateAcct(qs.strategy)
+updateEndEq(qs.strategy)
+```
+
+```{r,echo=FALSE}
+t(tradeStats(qs.strategy)["Net.Trading.PL"])
+t(tradeStats(qs.strategy)["Avg.Trade.PL"])
+t(tradeStats(qs.strategy)["Profit.To.Max.Draw"])
+t(tradeStats(qs.strategy)["Max.Drawdown"])
+t(tradeStats(qs.strategy)["Ann.Sharpe"])
+```
+
+The 10/100 day average is chosen randomly, therefore they may not be the best fast/slow averages to consider. In the next section, we will optimize our strategy to find the best fast/slow moving average periods.
+
+# Optimizing parameters
+
+We pick a reasonable range for both fast and slow moving averages, and test for the best pair in this section.
+
+```{r, results='hide'}
+initEq <- 1e6
+fast <- 10 #dummy
+slow <- 100 #dummy
+fastRange <- seq(30,55, by=5)
+slowRange <- seq(250,325,by=25)
+roc <- 60
+```
+
+```{r, results='hide',echo=FALSE}
+qs.strategy <- "RateOfChange"
+rm.strat(qs.strategy) #for rerun
+
+initPortf(qs.strategy,symbol, initDate=initDate)
+initAcct(qs.strategy,portfolios=qs.strategy, initDate=initDate, initEq=initEq)
+initOrders(portfolio=qs.strategy,initDate=startDate)
+strategy(qs.strategy,store=TRUE)
+
+#indicators
+add.indicator(strategy = qs.strategy, name = "SMA",arguments
+              =list(x=quote(Cl(mktdata)), n=fast), label="fast")
+add.indicator(strategy = qs.strategy, name = "SMA",arguments 
+              =list(x=quote(Cl(mktdata)), n=slow), label="slow")
+add.indicator(strategy = qs.strategy, name = "ROC", arguments 
+              =list(x=quote(Cl(mktdata)), n=roc), label = "roc")
+
+#signals
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="gt"),label="fast.gt.slow")
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="lt"),label="fast.lt.slow")
+add.signal(qs.strategy,name = "sigThreshold",arguments =
+             list(column="VOO.Close.roc",relationship="lt",
+                  threshold=-0.1,cross=TRUE),
+           label="signal.out")
+
+#rules
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.gt.slow",sigval=TRUE,
+                         replace = TRUE,orderqty = 2000,
+                         ordertype='market', orderside='long',
+                         orderset='ocolong'),
+         type='enter',
+         label = 'buy')
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.lt.slow", sigval=TRUE,
+                         replace = TRUE,orderqty='all',
+                         ordertype='market',orderside='long',
+                         orderset='ocolong'),
+         type='exit',
+         label = 'sell')
+add.rule(qs.strategy, name='ruleSignal',
+         arguments = list(sigcol="signal.out", sigval=TRUE, 
+                          replace = FALSE,
+                          orderside='long', 
+                          ordertype='market',
+                          orderqty='all',
+                          orderset='ocolong'),
+         type='chain', parent ='buy', 
+         label = 'override', enabled = TRUE)
+```
+
+The original strategy has been reinitialized and will not be shown here again. Only the optimization parameters are shown below:
+
+```{r,results='hide'}
+add.distribution(strategy = qs.strategy,
+                 paramset.label = "INDICATOROPT",
+                 component.type = "indicator",
+                 component.label = "fast",
+                 variable = list( n = fastRange ),
+                 label = "FARange"
+)
+
+add.distribution(strategy = qs.strategy,
+                 paramset.label = "INDICATOROPT",
+                 component.type = "indicator",
+                 component.label = "slow",
+                 variable = list( n = slowRange ),
+                 label = "SARange"
+)
+```
+
+Apply strategy and generate plots for analysis.
+
+```{r,results='hide',echo=FALSE}
+if( file.exists("resultsIndicatorOpt.RData") )
+{
+  load("resultsIndicatorOpt.RData")
+}else{
+  results <-apply.paramset(qs.strategy, paramset.label =
+                          "INDICATOROPT",portfolio.st=qs.strategy,
+                          account.st=qs.strategy, nsamples=0)
+
+save(list="results",file="resultsIndicatorOpt.RData")
+}
+```
+
+```{r}
+tradeGraphs(stats = results$tradeStats, 
+            free.params = c("FARange","SARange"),
+            statistics = c("Profit.To.Max.Draw", "Net.Trading.PL", 
+                           "Max.Drawdown"))
+```
+
+
+```{r}
+# Generate heat map (from Guy Yollin's quantstratIII notes).
+# FUN can be median or mean.
+z <- tapply(X=results$tradeStats$Max.Drawdown,
+            INDEX=list(results$tradeStats$FARange,
+                       results$tradeStats$SARange),
+            FUN=mean)
+
+x <- as.numeric(rownames(z))
+y <- as.numeric(colnames(z))
+
+filled.contour(x=x,y=y,z=z,color = heat.colors,
+               xlab="Fast Moving Average",ylab="Slow Moving Average")
+myTitle <- paste0("Max.Drawdown: ", symbol)
+title(myTitle)
+```
+
+The heat map shows that there is a stable region at 40/275 as the fast/slow moving average pair in Max. Drawdown, which coincides with the 3D plot generated in the previous code chunk (not knitted into the presentation). we will rerun the backtest with this fast/slow pair.
+
+```{r, results='hide',echo=FALSE}
+initEq <- 1e6
+fast <- 40
+slow <- 275
+roc <- 60
+
+qs.strategy <- "RateOfChange"
+rm.strat(qs.strategy) #for rerun
+
+initPortf(qs.strategy,symbol, initDate=initDate)
+initAcct(qs.strategy,portfolios=qs.strategy, initDate=initDate, initEq=initEq)
+initOrders(portfolio=qs.strategy,initDate=startDate)
+strategy(qs.strategy,store=TRUE)
+
+#indicators
+add.indicator(strategy = qs.strategy, name = "SMA",arguments
+              =list(x=quote(Cl(mktdata)), n=fast), label="fast")
+add.indicator(strategy = qs.strategy, name = "SMA",arguments 
+              =list(x=quote(Cl(mktdata)), n=slow), label="slow")
+add.indicator(strategy = qs.strategy, name = "ROC", arguments 
+              =list(x=quote(Cl(mktdata)), n=roc), label = "roc")
+
+#signals
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="gt"),label="fast.gt.slow")
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="lt"),label="fast.lt.slow")
+add.signal(qs.strategy,name = "sigThreshold",arguments =
+             list(column="VOO.Close.roc",relationship="lt",
+                  threshold=-0.1,cross=TRUE),
+           label="signal.out")
+
+#rules
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.gt.slow",sigval=TRUE,
+                         replace = TRUE,orderqty = 2000,
+                         ordertype='market', orderside='long',
+                         orderset='ocolong'),
+         type='enter',
+         label = 'buy')
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.lt.slow", sigval=TRUE,
+                         replace = TRUE,orderqty='all',
+                         ordertype='market',orderside='long',
+                         orderset='ocolong'),
+         type='exit',
+         label = 'sell')
+add.rule(qs.strategy, name='ruleSignal',
+         arguments = list(sigcol="signal.out", sigval=TRUE, 
+                          replace = FALSE,
+                          orderside='long', 
+                          ordertype='market',
+                          orderqty='all',
+                          orderset='ocolong'),
+         type='chain', parent ='buy', 
+         label = 'override', enabled = TRUE)
+
+applyStrategy(strategy=qs.strategy , portfolios=qs.strategy)
+updatePortf(qs.strategy)
+updateAcct(qs.strategy)
+updateEndEq(qs.strategy)
+```
+
+```{r,echo=FALSE}
+t(tradeStats(qs.strategy)["Net.Trading.PL"])
+t(tradeStats(qs.strategy)["Avg.Trade.PL"])
+t(tradeStats(qs.strategy)["Profit.To.Max.Draw"])
+t(tradeStats(qs.strategy)["Max.Drawdown"])
+t(tradeStats(qs.strategy)["Ann.Sharpe"])
+```
+
+Performance does seem to improve across the board! Let's try walk forward analysis on max. drawdown to see if our strategy is robust.
+
+# Walk-Forward Analysis
+
+Setup Walk-Forward Analysis
+
+```{r,results='hide'}
+qs.strategy <- "RateOfChange"
+qs.account <-"opt"
+qs.portfolio <- "opt"
+suppressWarnings(rm.strat(qs.strategy))
+#rm.strat(qs.strategy) #for rerun
+
+strategy(qs.strategy,store=TRUE)
+
+#indicators
+add.indicator(strategy = qs.strategy, name = "SMA",arguments
+              =list(x=quote(Cl(mktdata))), label="fast")
+add.indicator(strategy = qs.strategy, name = "SMA",arguments 
+              =list(x=quote(Cl(mktdata))), label="slow")
+add.indicator(strategy = qs.strategy, name = "ROC", arguments 
+              =list(x=quote(Cl(mktdata)), n=roc), label = "roc")
+
+#signals
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="gt"),label="fast.gt.slow")
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="lt"),label="fast.lt.slow")
+add.signal(qs.strategy,name = "sigThreshold",arguments =
+             list(column="VOO.Close.roc",relationship="lt",
+                  threshold=-0.1,cross=TRUE),
+           label="signal.out")
+
+#rules
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.gt.slow",sigval=TRUE,
+                         replace = TRUE,orderqty = 2000,
+                         ordertype='market', orderside='long',
+                         orderset='ocolong'),
+         type='enter',
+         label = 'buy')
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.lt.slow", sigval=TRUE,
+                         replace = TRUE,orderqty='all',
+                         ordertype='market',orderside='long',
+                         orderset='ocolong'),
+         type='exit',
+         label = 'sell')
+add.rule(qs.strategy, name='ruleSignal',
+         arguments = list(sigcol="signal.out", sigval=TRUE, 
+                          replace = FALSE,
+                          orderside='long', 
+                          ordertype='market',
+                          orderqty='all',
+                          orderset='ocolong'),
+         type='chain', parent ='buy', 
+         label = 'override', enabled = TRUE)
+
+#optimization parameters
+add.distribution(strategy = qs.strategy,
+                 paramset.label = "INDICATOROPT",
+                 component.type = "indicator",
+                 component.label = "fast",
+                 variable = list( n = fastRange ),
+                 label = "FARange"
+)
+
+add.distribution(strategy = qs.strategy,
+                 paramset.label = "INDICATOROPT",
+                 component.type = "indicator",
+                 component.label = "slow",
+                 variable = list( n = slowRange ),
+                 label = "SARange"
+)
+
+#define WFA
+yrsTrain <- 5     
+yrsTest <- 2
+metric <- "Max.Drawdown"
+
+.obj.func <- function(x)
+{
+  which(x==max(x))
+}
+
+#initialize portfolio
+initPortf(qs.portfolio,symbol, initDate=initDate)
+initAcct(qs.account,portfolios=qs.strategy, initDate=initDate, initEq=initEq)
+initOrders(portfolio="opt",initDate=startDate)
+
+results <- walk.forward(
+  strategy.st=qs.strategy,
+  paramset.label='INDICATOROPT',
+  portfolio.st="opt",
+  account.st="opt",
+  period='years',
+  k.training=yrsTrain,
+  k.testing=yrsTest,
+  obj.func=.obj.func,
+#  obj.args=list(x=quote(tradeStats.list$Net.Trading.PL)),
+  obj.args=list(x=quote(tradeStats.list$Max.Drawdown)),  
+  nsamples=0,
+  audit.prefix='wfa',
+  anchored=FALSE,
+  verbose=TRUE,
+  savewf=TRUE,
+  saveenv=TRUE       # NOTE: Need to set this to TRUE to
+                     # access the training set results (audit).
+)
+
+```
+
+Plot WFA
+
+```{r,echo=FALSE}
+chart.forward(results) 
+```
+
+Report WFE
+
+```{r,echo=FALSE,results='hide'}
+tr1 <- results$`20110103T000000.20151231T000000`
+tr2 <- results$`20130102T000000.20171229T000000`
+tr3 <- results$`20150102T000000.20191231T000000`
+
+(optComboIdx1 <- tr1$audit$param.combo.nr)
+trainStats1 <- tr1$audit$tradeStats
+(optTrainObj1 <- trainStats1[optComboIdx1, metric])
+(avgOptTrain1 <- optTrainObj1/yrsTrain)
+
+(optComboIdx2 <- tr2$audit$param.combo.nr)
+trainStats2 <- tr2$audit$tradeStats
+(optTrainObj2 <- trainStats2[optComboIdx2, metric])
+(avgOptTrain2 <- optTrainObj2/yrsTrain)
+
+(optComboIdx3 <- tr3$audit$param.combo.nr)
+trainStats3 <- tr3$audit$tradeStats
+(optTrainObj3 <- trainStats3[optComboIdx3, metric])
+(avgOptTrain3 <- optTrainObj3/yrsTrain)
+
+(optTrainMetric <- mean(c(avgOptTrain1, avgOptTrain2, avgOptTrain3)))
+(optTestMetric <- results$tradeStats[, metric]/5)
+```
+
+```{r,echo=FALSE}
+optTestMetric/optTrainMetric
+```
+
+There is no WFE metric because we are out of the market for the most part in this 10-year span, as seen in the walk-forward analysis plot. Therefore our strategy is not as robust on VOO based on Walk-Forward Analysis.
+
+# Monte Carlo Analysis
+
+Let's setup for Monte Carlo Analysis
+
+```{r, results='hide'}
+initEq <- 1e6
+fast <- 40
+slow <- 275
+roc <- 60
+
+qs.strategy <- "RateOfChange"
+rm.strat(qs.strategy) #for rerun
+
+initPortf(qs.strategy,symbol, initDate=initDate)
+initAcct(qs.strategy,portfolios=qs.strategy, initDate=initDate, initEq=initEq)
+initOrders(portfolio=qs.strategy,initDate=startDate)
+strategy(qs.strategy,store=TRUE)
+
+#indicators
+add.indicator(strategy = qs.strategy, name = "SMA",arguments
+              =list(x=quote(Cl(mktdata)), n=fast), label="fast")
+add.indicator(strategy = qs.strategy, name = "SMA",arguments 
+              =list(x=quote(Cl(mktdata)), n=slow), label="slow")
+add.indicator(strategy = qs.strategy, name = "ROC", arguments 
+              =list(x=quote(Cl(mktdata)), n=roc), label = "roc")
+
+#signals
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="gt"),label="fast.gt.slow")
+add.signal(qs.strategy,name="sigCrossover",arguments
+           =list(columns=c("fast","slow"),relationship="lt"),label="fast.lt.slow")
+add.signal(qs.strategy,name = "sigThreshold",arguments =
+             list(column="VOO.Close.roc",relationship="lt",
+                  threshold=-0.1,cross=TRUE),
+           label="signal.out")
+
+#rules
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.gt.slow",sigval=TRUE,
+                         replace = TRUE,orderqty = 2000,
+                         ordertype='market', orderside='long',
+                         orderset='ocolong'),
+         type='enter',
+         label = 'buy')
+add.rule(qs.strategy, 
+         name='ruleSignal',
+         arguments =list(sigcol="fast.lt.slow", sigval=TRUE,
+                         replace = TRUE,orderqty='all',
+                         ordertype='market',orderside='long',
+                         orderset='ocolong'),
+         type='exit',
+         label = 'sell')
+add.rule(qs.strategy, name='ruleSignal',
+         arguments = list(sigcol="signal.out", sigval=TRUE, 
+                          replace = FALSE,
+                          orderside='long', 
+                          ordertype='market',
+                          orderqty='all',
+                          orderset='ocolong'),
+         type='chain', parent ='buy', 
+         label = 'override', enabled = TRUE)
+
+applyStrategy(strategy=qs.strategy , portfolios=qs.strategy)
+updatePortf(qs.strategy)
+updateAcct(qs.strategy)
+updateEndEq(qs.strategy)
+```
+
+```{r,results='hide',echo=FALSE}
+txns <- getTxns(Portfolio = qs.strategy, Symbol = symbol)
+```
+
+MCSIM without replacement
+
+```{r,echo=FALSE}
+## mcsim:
+# Without replacement:
+fabmc <- mcsim(Portfolio = qs.strategy, n = 4, replacement = FALSE,
+               use = "txns", CI = 0.95)
+
+# Runs OK; however, no difference in plot whether
+# normalize is TRUE or FALSE (seems set to FALSE):
+plot(fabmc, normalize = TRUE)
+hist(fabmc, normalize = TRUE)
+```
+
+MCSIM with replacement
+
+```{r,echo=FALSE}
+# With replacement
+fabmc <- mcsim(Portfolio = qs.strategy, n = 4, replacement = TRUE,
+               use = "txns", CI = 0.95)
+
+# Runs OK; however, no difference in plot whether
+# normalize is TRUE or FALSE (seems set to FALSE):
+plot(fabmc, normalize = TRUE)
+hist(fabmc, normalize = TRUE)
+
+```
+
+Here is a summary of the CI's for different performance metrics
+
+```{r,echo=FALSE}
+# summary returns the CI's for various performance metrics
+summary(fabmc)
+```
+
+TXNSIM without replacement
+
+```{r,echo=FALSE}
+txsm <- txnsim(Portfolio = qs.strategy, n = 4, replacement = TRUE,
+               tradeDef = "flat.to.flat")   #, CI = 0.95: Default)
+
+plot(txsm, normalize = TRUE)
+hist(txsm, normalize = FALSE)
+```
+
+TXNSIM with replacement
+
+```{r, echo=FALSE}
+txsm <- txnsim(Portfolio = qs.strategy, n = 4, replacement = FALSE,
+               tradeDef = "flat.to.flat")   #, CI = 0.95: Default)
+
+plot(txsm, normalize = TRUE)
+hist(txsm, normalize = FALSE)
+```
+
+Here shows the quantiles of culmulative P&L
+
+```{r,echo=FALSE}
+quantile(txsm)
+```
+
+Here is a summary of the CI's for different performance metrics
+
+```{r,echo=FALSE}
+summary(txsm)
+```
+
+# Conclusion
+
+This modified moving average strategy does not perform well on VOO etf. The optimum parameters show that we are out of the market for the most time. Therefore, this is not a viable strategy for VOO and more deliberations are needed before apply this strategy.
